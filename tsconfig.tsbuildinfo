@@ -1,0 +1,1 @@
+{"root":["./src/main.ts","./src/game/game.ts","./src/game/entities/ball.ts","./src/game/entities/bullet.ts","./src/game/entities/player.ts","./src/game/utils/assets.ts","./src/game/utils/input.ts","./src/game/utils/math.ts","./src/game/utils/sound.ts"],"version":"5.9.3"}
