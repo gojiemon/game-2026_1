@@ -20,9 +20,20 @@ const STACK_LIMIT = 3;
 const BALL_RADIUS = 18;
 const BULLET_WIDTH = 8;
 const BULLET_HEIGHT = 18;
-const BULLET_SPEED = 520;
+const BULLET_SPEED = 520; // retained for compatibility; not used in jump hitbox
 const SHOOT_COOLDOWN = 0.22;
 const TELEGRAPH_DELAY = 0.42;
+// Jump settings (movement + scale)
+const JUMP_DURATION = 0.3; // seconds
+const JUMP_HEIGHT = 48; // px offset upward at peak
+const JUMP_SCALE = 1.2; // visual scale during jump
+// Harvest UI constants
+const HARVEST_PER_CRATE = 10;
+const CRATE_SCALE = 0.12; // smaller crates (drawW = naturalWidth * CRATE_SCALE)
+const CRATE_STACK_SPACING_MULT = 0.62; // spacing = drawH * 0.62 (slight overlap)
+const CRATE_UI_MARGIN_X = 20; // px margin from right
+const CRATE_UI_MARGIN_Y = 20; // px margin from bottom
+const MAX_CRATES_TO_DRAW = 8; // cap on visual stack for UI
 // Difficulty tuning
 const INITIAL_SPAWN_INTERVAL = 1.0;
 const MIN_SPAWN_INTERVAL = 0.35;
@@ -107,6 +118,12 @@ export default class Game {
             writable: true,
             value: 0
         });
+        Object.defineProperty(this, "harvestCount", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: 0
+        }); // apples collected by jump
         Object.defineProperty(this, "shootTimer", {
             enumerable: true,
             configurable: true,
@@ -131,6 +148,18 @@ export default class Game {
             writable: true,
             value: 0
         });
+        Object.defineProperty(this, "currentLane", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: 0
+        }); // track current lane for sprite facing
+        Object.defineProperty(this, "jumpTimer", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: 0
+        }); // remaining jump time; >0 means jumping
         Object.defineProperty(this, "assetsLoaded", {
             enumerable: true,
             configurable: true,
@@ -155,6 +184,12 @@ export default class Game {
             writable: true,
             value: new Sound()
         });
+        Object.defineProperty(this, "crateLogged", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: false
+        }); // log crate size debug once
         Object.defineProperty(this, "loop", {
             enumerable: true,
             configurable: true,
@@ -216,6 +251,7 @@ export default class Game {
         this.stacked = [];
         this.telegraphs = [];
         this.score = 0;
+        this.harvestCount = 0;
         this.elapsed = 0;
         this.shootTimer = 0;
         this.spawnTimer = 0;
@@ -287,12 +323,15 @@ export default class Game {
         this.spawnTimer = Math.max(0, this.spawnTimer - dt);
     }
     updatePlayer(dt) {
-        const targetX = this.laneToX(this.input.getLane());
+        const lane = this.input.getLane();
+        this.currentLane = lane; // remember for sprite selection
+        const targetX = this.laneToX(lane);
         this.player.update(dt, targetX);
     }
     handleShooting(_dt) {
-        if (this.input.consumeShoot() && this.shootTimer <= 0) {
-            this.spawnBullet();
+        if (this.input.consumeShoot() && this.shootTimer <= 0 && this.jumpTimer <= 0) {
+            // Jump instead of firing: start jump window and reuse hit detection
+            this.jumpTimer = JUMP_DURATION;
             this.sound.playShoot(); // hop-like SFX
             this.shootTimer = SHOOT_COOLDOWN;
         }
@@ -325,9 +364,8 @@ export default class Game {
         // Telegraphs handled in handleSpawning; kept here for clarity/future tweaks.
     }
     updateBullets(dt) {
-        for (const b of this.bullets) {
-            b.update(dt);
-        }
+        // Bullets are no longer rendered/moved; jump uses instantaneous hitbox
+        this.jumpTimer = Math.max(0, this.jumpTimer - dt);
     }
     updateBalls(dt) {
         const defenseLineY = this.getDefenseLineY();
@@ -350,15 +388,25 @@ export default class Game {
     }
     checkCollisions() {
         const remainingBalls = [];
+        // Prepare jump hitbox if jumping (reuses bullet collision size/logic)
+        const jumpActive = this.jumpTimer > 0;
+        const jumpProgress = jumpActive ? 1 - this.jumpTimer / JUMP_DURATION : 0;
+        // Apply vertical offset following -sin(pi * t) curve
+        const jumpOffsetY = jumpActive ? -Math.sin(Math.PI * jumpProgress) * JUMP_HEIGHT : 0;
+        const jumpProbe = jumpActive
+            ? {
+                x: this.player.x,
+                y: this.player.y + jumpOffsetY - this.player.radius, // use offset position for hit
+                width: BULLET_WIDTH,
+                height: BULLET_HEIGHT
+            }
+            : null;
         for (const ball of this.balls) {
             let hit = false;
-            for (const bullet of this.bullets) {
-                if (this.bulletHitsBall(bullet, ball)) {
-                    hit = true;
-                    bullet.y = -100; // mark for removal
-                    this.score += 1;
-                    break;
-                }
+            if (jumpProbe && this.bulletHitsBall(jumpProbe, ball)) {
+                hit = true;
+                this.score += 1;
+                this.harvestCount += 1; // count harvest when apple is collected
             }
             if (!hit)
                 remainingBalls.push(ball);
@@ -366,7 +414,7 @@ export default class Game {
         this.balls = remainingBalls;
     }
     cleanup() {
-        this.bullets = this.bullets.filter((b) => b.y + b.height > 0);
+        // No bullets to clean; keep existing logic minimal
     }
     checkStackLimit() {
         if (this.stacked.length >= STACK_LIMIT && this.state !== GameState.GameOver) {
@@ -419,6 +467,7 @@ export default class Game {
         this.drawTelegraphs();
         this.drawEntities();
         this.drawHUD();
+        this.drawHarvestUI(); // draw crate stack and bird reward
         this.drawStateOverlays();
     }
     drawBackground() {
@@ -454,14 +503,23 @@ export default class Game {
         this.ctx.stroke();
     }
     drawEntities() {
-        for (const bullet of this.bullets) {
-            bullet.draw(this.ctx);
-        }
         for (const ball of this.balls) {
             const appleImage = this.assets?.apples[ball.appleIndex];
             ball.draw(this.ctx, appleImage);
         }
-        this.player.draw(this.ctx, this.assets?.rabbit); // draw player sprite centered
+        // Choose sprite based on lane + jump state
+        const jumpActive = this.jumpTimer > 0;
+        const jumpProgress = jumpActive ? 1 - this.jumpTimer / JUMP_DURATION : 0;
+        const jumpOffsetY = jumpActive ? -Math.sin(Math.PI * jumpProgress) * JUMP_HEIGHT : 0; // apply easing offset
+        const scale = jumpActive ? JUMP_SCALE : 1; // scale up on jump
+        const rabbitImage = (() => {
+            if (this.currentLane === 0) {
+                return jumpActive ? this.assets?.rabbitJumpLeft : this.assets?.rabbitLeft;
+            }
+            return jumpActive ? this.assets?.rabbitJumpRight : this.assets?.rabbitRight;
+        })();
+        // draw player sprite centered, with jump offset + scale
+        this.player.draw(this.ctx, rabbitImage, jumpOffsetY, scale);
     }
     drawStackedBalls() {
         const defenseLineY = this.getDefenseLineY();
@@ -504,13 +562,14 @@ export default class Game {
         this.ctx.fillStyle = '#e5e7eb';
         this.ctx.font = '20px "Segoe UI", sans-serif';
         this.ctx.textAlign = 'left';
-        this.ctx.fillText(`Score: ${this.score}`, 20, 34);
+        this.ctx.fillText(`Harvest: ${this.harvestCount}`, 20, 34); // show harvest prominently
+        this.ctx.fillText(`Score: ${this.score}`, 20, 60);
         const timeText = this.state === GameState.Playing
             ? this.elapsed.toFixed(1)
             : this.elapsed.toFixed(1);
-        this.ctx.fillText(`Time: ${timeText}s`, 20, 64);
+        this.ctx.fillText(`Time: ${timeText}s`, 20, 86);
         const stackText = `STACK ${this.stacked.length}/${STACK_LIMIT}`;
-        this.ctx.fillText(stackText, 20, 94);
+        this.ctx.fillText(stackText, 20, 112);
     }
     drawStateOverlays() {
         if (!this.assetsLoaded) {
@@ -533,6 +592,86 @@ export default class Game {
         this.ctx.fillText(title, this.canvas.width / 2, this.canvas.height / 2 - 12);
         this.ctx.font = '20px "Segoe UI", sans-serif';
         this.ctx.fillText(subtitle, this.canvas.width / 2, this.canvas.height / 2 + 22);
+    }
+    // Draw crate stack UI and reward bird; positioned at bottom-right
+    drawHarvestUI() {
+        // Always render debug text to confirm call path
+        const debugText = `UI DEBUG: crates=${Math.floor(this.harvestCount / HARVEST_PER_CRATE)} remainder=${this.harvestCount % HARVEST_PER_CRATE}`;
+        this.ctx.fillStyle = '#e5e7eb';
+        this.ctx.font = '14px "Segoe UI", sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.fillText(debugText, 20, this.canvas.height - 20);
+        // If assets missing, draw a placeholder box to confirm positioning
+        if (!this.assetsLoaded || !this.assets) {
+            const pw = 100 * CRATE_SCALE; // placeholder width scaled
+            const ph = pw * 0.8;
+            const x = this.canvas.width - CRATE_UI_MARGIN_X - pw;
+            const y = this.canvas.height - CRATE_UI_MARGIN_Y - ph;
+            this.ctx.strokeStyle = 'rgba(255,0,0,0.8)';
+            this.ctx.lineWidth = 2;
+            this.ctx.strokeRect(x, y, pw, ph);
+            return;
+        }
+        const crates = Math.floor(this.harvestCount / HARVEST_PER_CRATE);
+        const remainder = this.harvestCount % HARVEST_PER_CRATE;
+        const state0 = this.assets.crateState0;
+        const state1 = this.assets.crateState1;
+        const state2 = this.assets.crateState2;
+        const state3 = this.assets.crateState3;
+        // Use natural size * scale to avoid inverse/compounded scaling
+        const crateWidth = state0.naturalWidth * CRATE_SCALE;
+        const crateHeight = state0.naturalHeight * CRATE_SCALE;
+        const spacing = Math.round(crateHeight * CRATE_STACK_SPACING_MULT); // spacing from drawH to create overlap
+        const bottomY = this.canvas.height - CRATE_UI_MARGIN_Y - crateHeight; // base Y for stacking
+        // Debug log crate sizing once to verify scaling direction
+        if (!this.crateLogged) {
+            console.log('Crate scale debug', {
+                CRATE_SCALE,
+                naturalW: state0.naturalWidth,
+                naturalH: state0.naturalHeight,
+                drawW: crateWidth,
+                drawH: crateHeight
+            });
+            this.crateLogged = true;
+        }
+        // Draw completed crates: always as filled (state3) and never revert to empty
+        const cratesToDraw = Math.min(crates, MAX_CRATES_TO_DRAW);
+        for (let i = 0; i < cratesToDraw; i++) {
+            const idxFromBottom = i;
+            const x = this.canvas.width - CRATE_UI_MARGIN_X - crateWidth;
+            const y = bottomY - idxFromBottom * spacing; // stack upward with overlap
+            this.ctx.drawImage(state3, x, y, crateWidth, crateHeight); // filled crate image
+        }
+        // Draw in-progress crate with state image if any remainder
+        if (remainder > 0) {
+            const idxFromBottom = cratesToDraw; // sit on top of completed stack
+            const x = this.canvas.width - CRATE_UI_MARGIN_X - crateWidth;
+            const y = bottomY - idxFromBottom * spacing; // stack upward with overlap
+            // Select crate state based on remainder thresholds
+            const stateImg = remainder >= 6
+                ? state3 // 6-9 (fullish)
+                : remainder >= 3
+                    ? state2 // 3-5 (medium)
+                    : state1; // 1-2 (small)
+            this.ctx.drawImage(stateImg, x, y, crateWidth, crateHeight);
+        }
+        else if (crates === 0) {
+            // Initial UI: show one empty crate only when no harvest at all
+            const x = this.canvas.width - CRATE_UI_MARGIN_X - crateWidth;
+            const y = bottomY;
+            this.ctx.drawImage(state0, x, y, crateWidth, crateHeight);
+        }
+        // Bird reward once 5 crates completed (or more); use top crate position
+        if (crates >= 5) {
+            const bird = this.assets.rewardBird;
+            const birdWidth = crateWidth * 0.6;
+            const birdHeight = birdWidth * (bird.height / bird.width);
+            const topIndex = Math.min(cratesToDraw - 1, MAX_CRATES_TO_DRAW - 1);
+            const baseY = bottomY - topIndex * spacing;
+            const x = this.canvas.width - CRATE_UI_MARGIN_X - crateWidth - birdWidth * 0.1;
+            const y = baseY - birdHeight * 0.8;
+            this.ctx.drawImage(bird, x, y, birdWidth, birdHeight);
+        }
     }
 }
 //# sourceMappingURL=Game.js.map

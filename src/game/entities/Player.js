@@ -40,12 +40,15 @@ export default class Player {
         this.smoothing = 1 - Math.exp(-stiffness * dt);
         this.x = lerp(this.x, targetX, this.smoothing);
     }
-    draw(ctx, image) {
-        // Render sprite larger: base diameter (radius*2) × 3 for clear visibility
-        const size = this.radius * 6;
+    draw(ctx, image, offsetY = 0, scale = 1) {
+        // Base visual size; scale can enlarge during jump
+        const baseSize = this.radius * 6;
+        const size = baseSize * scale;
+        const drawX = this.x - size / 2;
+        const drawY = this.y + offsetY - size / 2; // apply jump offset to visual position
         if (image) {
             // Draw rabbit centered on logical position
-            ctx.drawImage(image, this.x - size / 2, this.y - size / 2, size, size);
+            ctx.drawImage(image, drawX, drawY, size, size);
             return;
         }
         // Fallback: intentionally blank to avoid old shapes when image missing
