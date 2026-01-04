@@ -13,24 +13,26 @@ export type LoadedAssets = {
   rewardBird: HTMLImageElement;
 };
 
+const withBase = (p: string) => new URL(p, import.meta.env.BASE_URL).toString(); // respect base for dev/Pages
+
 export async function loadAssets(): Promise<LoadedAssets> {
-  const background = await loadImage('/assets/back.png');
+  const background = await loadImage(withBase('assets/back.png'));
   const apples = await Promise.all([
-    loadImage('/assets/apple1.png'),
-    loadImage('/assets/apple2.png'),
-    loadImage('/assets/apple3.png')
+    loadImage(withBase('assets/apple1.png')),
+    loadImage(withBase('assets/apple2.png')),
+    loadImage(withBase('assets/apple3.png'))
   ]);
-  const rabbitLeft = await loadImage('/assets/rabbit1.png');
-  const rabbitRight = await loadImage('/assets/rabbit3.png');
-  const rabbitJumpLeft = await loadImage('/assets/rabbit2.png');
-  const rabbitJumpRight = await loadImage('/assets/rabbit4.png');
+  const rabbitLeft = await loadImage(withBase('assets/rabbit1.png'));
+  const rabbitRight = await loadImage(withBase('assets/rabbit3.png'));
+  const rabbitJumpLeft = await loadImage(withBase('assets/rabbit2.png'));
+  const rabbitJumpRight = await loadImage(withBase('assets/rabbit4.png'));
   // crate states (switching images instead of overlays)
-  const crateState0 = await loadImage('/assets/crate_state_0.png');
-  const crateState1 = await loadImage('/assets/crate_state_1.png');
-  const crateState2 = await loadImage('/assets/crate_state_2.png');
-  const crateState3 = await loadImage('/assets/crate_state_3.png');
+  const crateState0 = await loadImage(withBase('assets/crate_state_0.png'));
+  const crateState1 = await loadImage(withBase('assets/crate_state_1.png'));
+  const crateState2 = await loadImage(withBase('assets/crate_state_2.png'));
+  const crateState3 = await loadImage(withBase('assets/crate_state_3.png'));
   // reward bird file has double .png extension on disk; match exact name to avoid 404
-  const rewardBird = await loadImage('/assets/reward_bird.png.png');
+  const rewardBird = await loadImage(withBase('assets/reward_bird.png.png'));
   return {
     background,
     apples,
